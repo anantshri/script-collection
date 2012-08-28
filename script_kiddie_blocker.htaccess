@@ -1,0 +1,20 @@
+#Script kiddie blocker start
+
+RewriteEngine On 
+<IfModule mod_rewrite.c>
+RewriteCond %{HTTP_USER_AGENT} ^w3af.sourceforge.net [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} dirbuster [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} nikto [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} sqlmap [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} fimap [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} nessus [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} whatweb [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} Openvas [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} jbrofuzz [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} libwhisker [NC,OR]
+RewriteCond %{HTTP_USER_AGENT} webshag [NC,OR]
+RewriteCond %{HTTP:Acunetix-Product} ^WVS
+RewriteRule ^.* http://127.0.0.1 [R=301,L]
+</IfModule>
+
+#Script kiddie blocker End
