@@ -10,4 +10,4 @@ resource_abusive_bot_blocking.htaccess -> htaccess rules to protect against abus
 
 script_kiddie_blocker.htaccess -> htaccess rules to protect against script kiddies.
 
-wadl_statistics_reporter.py -> python script to cound no of resources,methods, and parameters listed in a wadl file.
+wadl_statistics_reporter.py -> python script to count no of resources,methods, and parameters listed in a wadl file.
