@@ -1,0 +1,27 @@
+#!/bin/bash
+# The idea of this super wrapper over vagrant is to help with routine task
+# by adding some meta commands to vagrant.
+# vagrant ip: runs ifconfig in virtual machine and gives the details.
+# vagrant log: could be used to do a tail -f on nginx error log.
+# Hopefully this will be useful for someone.
+# Initial Script written by : Anant Shrivastava
+# 
+VAGRANT_BIN="/usr/bin/vagrant"
+if [[ $1 == -* ]]
+then
+	$VAGRANT_BIN $*
+else
+	if [ $1 = "ip" ]
+	then
+			$VAGRANT_BIN ssh -c "sudo ifconfig"
+	elif [ $1 = "cmd" ]
+	then
+			shift
+			$VAGRANT_BIN ssh -c "$*"
+	elif [ $1 == "log" ]
+	then
+		$VAGRANT_BIN ssh -c "sudo tail -f /var/log/nginx/error.log"
+	else
+		$VAGRANT_BIN $*
+	fi
+fi%
