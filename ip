@@ -1,4 +1,8 @@
 #!/bin/bash
+#
+# IP command gives interface name and ipv4 ip
+# Only tested on MacOSX
+#
 for interface in `ifconfig | grep ": flags" | cut -f1 -d":"`; do
 	ip=$(ifconfig $interface | grep "inet " | cut -f2 -d" ")
 	if [ ! -z $ip ]; then
