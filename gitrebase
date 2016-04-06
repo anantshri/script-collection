@@ -1,0 +1,17 @@
+#!/bin/bash
+# Script to rebase git repository based on upstream
+# either provide upstream url or update
+# FIXME: URL validation
+if [ $# -eq 1 ]
+then
+	git checkout master
+	if [ $1 != "update" ]
+	then
+		git remote add upstream $1
+	fi
+	git fetch upstream
+	git rebase upstream/master
+	git push origin master
+else
+	echo "$0 'upstream URL'"
+fi
