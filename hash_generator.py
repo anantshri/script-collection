@@ -32,8 +32,6 @@ def main(argv):
     print "Base64 : " + base64.b64encode(input.encode())
     print "Base16 : " + base64.b16encode(input.encode())
     print "Base32 : " + base64.b32encode(input.encode())
-    
-
 
 if __name__ == "__main__":
    main(sys.argv[1:])
