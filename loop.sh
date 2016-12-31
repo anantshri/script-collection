@@ -11,5 +11,7 @@
 #
 while read p;
 do
+  # Comment out the line below in case you don't want to print input lines
+  echo "Input: $p"
   $2$p$3
 done<$1
