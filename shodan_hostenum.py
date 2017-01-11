@@ -18,6 +18,7 @@ Port: 53 ;
 import sys
 import shodan
 api = shodan.Shodan('API_KEY_HERE')
+vulncnt=0
 if len(sys.argv) > 1:
     #print "Lets check api"
     host = api.host(sys.argv[1])
