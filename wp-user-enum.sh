@@ -11,7 +11,7 @@ then
 else
     count=0
     title=0
-    while [ $count -lt 10 ]
+    while [ $count -lt 100 ]
     do
         result=`curl -I -s --max-time 30 --max-filesize 1 $1?author=$count | grep -F 'Location:'`
         name=`echo $result |  rev | cut -f2 -d"/" | rev`
