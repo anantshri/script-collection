@@ -1,11 +1,21 @@
 #!/bin/bash
-#
-# IP command gives interface name and ipv4 ip
-# Only tested on MacOSX
-#
-for interface in `ifconfig | grep ": flags" | cut -f1 -d":"`; do
-	ip=$(ifconfig $interface | grep "inet " | cut -f2 -d" ")
-	if [ ! -z $ip ]; then
-	    echo "$interface : $ip"
-	fi
-done
+if [ "$(uname)" == "Darwin" ]; then
+    # Do something under Mac OS X platform
+	for interface in `ifconfig | grep ": flags" | cut -f1 -d":"`; do
+	        ip=$(ifconfig $interface | grep "inet " | cut -f2 -d" ")
+	        if [ ! -z $ip ]; then
+	            echo "$interface : $ip"
+	        fi
+	done
+elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+    # Do something under GNU/Linux platform
+	for interface in `ifconfig | grep "Link " | cut -f1 -d" "`; do
+	        ip=$(ifconfig $interface | tr -s " " | grep "inet" | cut -f2 -d":" | cut -f1 -d" ")
+	        if [ ! -z $ip ]; then
+	            echo "$interface : $ip"
+	        fi
+	done
+elif [ "$(expr substr $(uname -s) 1 10)" == "MINGW32_NT" ]; then
+    # Do something under Windows NT platform
+    echo "Not implemented for Windows"
+fi
