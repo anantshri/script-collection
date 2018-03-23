@@ -32,10 +32,11 @@ if len(sys.argv) > 1:
     # Print all banners
     # Print all Vuln's caught by Shodan
     print "Vulnerabilities: "
-    for vuln in host['vulns']:
-        if vuln.find("!") == -1:
-            vulncnt = vulncnt + 1
-            print "**  " + vuln + "  **"
+    if host.get('vulns') is not None:
+        for vuln in host['vulns']:
+            if vuln.find("!") == -1:
+                vulncnt = vulncnt + 1
+                print "**  " + vuln + "  **"
     if vulncnt == 0:
         print "No Vulnerability picked by Shodan"
     print ""
