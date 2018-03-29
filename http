@@ -1,0 +1,8 @@
+#!/bin/bash
+PY=`python -c 'import platform; print(platform.python_version())' | cut -f1 -d"."`
+if [ $PY == 2 ]
+then
+	python -m SimpleHTTPServer $*
+else
+	python3 -m http.server $*
+fi
