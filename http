@@ -1,8 +1,18 @@
 #!/bin/bash
-PY=`python -c 'import platform; print(platform.python_version())' | cut -f1 -d"."`
-if [ $PY == 2 ]
-then
-	python -m SimpleHTTPServer $*
+PORT=${1:-8000}
+shift
+if which python &> /dev/null; then
+	PY=`python -c 'import platform; print(platform.python_version())' | cut -f1 -d"."`
+	if [ $PY == 2 ]
+	then
+		python -m SimpleHTTPServer $PORT $*
+	else
+		python3 -m http.server $PORT $*
+	fi
+elif which ruby &> /dev/null; then
+	ruby -run -ehttpd . -p$PORT $*
+elif which php &> /dev/null; then
+	php -S 127.0.0.1:$PORT $*
 else
-	python3 -m http.server $*
+	echo "Python/Ruby/PHP not found"
 fi
