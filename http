@@ -7,7 +7,7 @@ if which python &> /dev/null; then
 	then
 		python -m SimpleHTTPServer $PORT $*
 	else
-		python3 -m http.server $PORT $*
+		python -m http.server $PORT $*
 	fi
 elif which ruby &> /dev/null; then
 	ruby -run -ehttpd . -p$PORT $*
