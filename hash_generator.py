@@ -13,10 +13,8 @@ def main(argv):
     epilog="""Credit (C) Anant Shrivastava http://anantshri.info"""
     parser = argparse.ArgumentParser(description=desc,epilog=epilog)
     parser.add_argument("--string",help="Provide URL",dest='input',required=True)
-    parser.add_argument("--type",help="[Optional] Type of Encoding / Encryption",dest='type',required=False)
     x=parser.parse_args()
     input=x.input
-    type=x.type
     #print hashlib.algorithm_available
     print "Input  : " + input.encode()
     print "***************  Various Bases  ******************************"
@@ -37,7 +35,6 @@ def main(argv):
     print "LDAP SSHA : " + passlib.apps.ldap_context.replace(default="ldap_salted_md5").hash(input.encode())
     print "MySQL 4: " + passlib.apps.mysql_context.hash(input.encode())
     print "MySQL 3: " + passlib.apps.mysql3_context.hash(input.encode())
-    #print "PHPass: " + passlib.apps.phpass_context.hash(input.encode())
     print "MSSQL 2000: " + passlib.hash.mssql2000.hash(input.encode())
     print "MSSQL 2005: " + passlib.hash.mssql2005.hash(input.encode())
     print "Oracle 11: " + passlib.hash.oracle11.hash(input.encode())
