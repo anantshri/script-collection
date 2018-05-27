@@ -1,5 +1,16 @@
 #!/bin/bash
 
+# Credits
+# 1. https://stackoverflow.com/a/39422067 : For eval idea
+# 2. https://gist.github.com/obscuresec/71df69d828e6e05986e9 : Basic powershell webserver code
+# 3. https://gist.github.com/theit8514/58a31895ae901206f6957a382f61618b : mimetype collection and indexpage addition and 404
+# 
+
+# TODO's
+# 1. take commandline argument in powershell also
+# 1. exit in powershell gracefully at ctrl + c or ctrl + break (c not working break not tested)
+# 
+
 #bash PORT=${1:-8000}
 #bash shift
 #bash if which python &> /dev/null; then
