@@ -9,7 +9,7 @@
 # TODO's
 # 1. take commandline argument in powershell also
 # 1. exit in powershell gracefully at ctrl + c or ctrl + break (c not working break not tested)
-# 
+# 1. find way to remove extension to remove ambiguity that its only ps1 script
 
 #bash PORT=${1:-8000}
 #bash shift
