@@ -1,6 +1,6 @@
 if [ "$(uname)" == "Darwin" ]; then
     # Do something under Mac OS X platform
-	for interface in `ifconfig | grep ": flags" | cut -f1 -d":"`; do
+	for interface in `ifconfig $1 | grep ": flags" | cut -f1 -d":"`; do
 	        ip=$(ifconfig $interface | grep "inet " | cut -f2 -d" ")
 	        if [ $interface != "lo0" ]; then
 	        	ip6=$(ifconfig $interface | grep "inet6" | cut -f2 -d" ")
@@ -14,7 +14,7 @@ if [ "$(uname)" == "Darwin" ]; then
 	done
 elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     # Do something under GNU/Linux platform
-	for interface in `ifconfig | grep "Link " | cut -f1 -d" "`; do
+	for interface in `ifconfig $1 | grep "Link " | cut -f1 -d" "`; do
 	        ip=$(ifconfig $interface | tr -s " " | grep "inet" | cut -f2 -d":" | cut -f1 -d" ")
 	        if [ ! -z $ip ]; then
 	            echo "$interface : $ip"
