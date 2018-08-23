@@ -3,10 +3,10 @@ script-collection
 
 Collection of my scripts ranging from bash or python or shell. 
 
-__Shell__: Contains various shell scripts i wrote
-__Python__: Python code mostly 2.7 but some 2and3 and some 3 specific in it. will further divide once i have enough numbers
-__PS1__: Contains my Powershell experiments not much at this point
-__Misc__: Anything which is doesn't fit in anything else or one off work
+__Shell__: Contains various shell scripts i wrote <br>
+__Python__: Python code mostly 2.7 but some 2and3 and some 3 specific in it. will further divide once i have enough numbers <br>
+__PS1__: Contains my Powershell experiments not much at this point <br>
+__Misc__: Anything which is doesn't fit in anything else or one off work <br>
 
 Will use this Location to document what's what:
 
