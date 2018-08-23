@@ -22,7 +22,13 @@ genymotion.sh -> start stop genmotion VM's via commandline
 
 gitrebase -> when you have to update your fork with the upstream changes and not add an extra commit in your repo.
 
+hex2dec -> converts Hexadecimal to Decimal value
+
+ip -> extracts interface name and ip address from Mac OS and Linux plateform
+
 http -> attempts to start a webserver at this location using multiple languages as fall back
+
+loop.sh -> loops over content of file and runs second and third option specifed in the command on each line
 
 publicip.sh -> shows public ip of the computer
 
