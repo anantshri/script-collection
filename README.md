@@ -18,17 +18,17 @@ dec2hex hex2dec -> converts between hexadecimal to decimal
 
 dvcsfinder -> looks for signs of various dvcs files.
 
-genymotion.sh -> start stop genmotion VM's via commandline
+genymotion.sh -> start stop genymotion VM's via commandline
 
 gitrebase -> when you have to update your fork with the upstream changes and not add an extra commit in your repo.
 
 hex2dec -> converts Hexadecimal to Decimal value
 
-ip -> extracts interface name and ip address from Mac OS and Linux plateform
+ip -> extracts interface name and ip address from Mac OS and Linux platform
 
 http -> attempts to start a webserver at this location using multiple languages as fall back
 
-loop.sh -> loops over content of file and runs second and third option specifed in the command on each line
+loop.sh -> loops over content of file and runs second and third option specified in the command on each line
 
 publicip.sh -> shows public ip of the computer
 
@@ -40,7 +40,7 @@ wp-user-enum.sh -> wordpress username enumeration script
 
 ### Python 
 
-char_to_num.py -> gives you a single number representing the string via converting alphabets to digits and subming up digits till a single digit is identified.
+char_to_num.py -> gives you a single number representing the string via converting alphabets to digits and summing up digits till a single digit is identified.
 
 custom_enc_decoder -> custom encoder / decoder, add your own words swaps and encode / decode at will.
 
