@@ -1,0 +1,12 @@
+#!/bin/bash
+echo "Zip file content"
+unzip -l "$1"
+echo "*************CLEANING-UP STARTED ZIP FILES ***********"
+echo "Removing all .DS_Store"
+zip -d "$1" "*.DS_Store"
+echo "Removing all __MACOSX folders"
+zip -d "$1" "__MACOSX*"
+echo "*************CLEANING-UP DONE ZIP FILES ***********"
+echo "Zip file after cleanup"
+unzip -l "$1"
+echo "ALL DONE"
