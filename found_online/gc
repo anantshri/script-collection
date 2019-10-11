@@ -1,0 +1,98 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# git-dolly -- Clone a git repository and retain directory structure
+#
+# Uses by default "~/src" as the root to where to clone repositories. It then
+# automatically sets up the target directory based on the given URL.
+#
+# To override the default, set GIT_DOLLY_PATH.
+#
+# Example:
+#
+# These commands would all clone the repository to $HOME/src/scm.com/path/repository.
+# $ git dolly https://scm.com/path/repository.git
+# $ git dolly scm.com:path/repository.git
+
+import os
+import subprocess
+import sys
+
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    from urlparse import urlparse
+
+
+def main():
+    root = os.getenv('GIT_DOLLY_PATH', os.path.expanduser('~/WORK/'))
+    prog = os.path.basename(sys.argv[0])
+    argv = sys.argv[2:] if sys.argv[0] == 'git' else sys.argv[1:]
+
+    if not argv:
+        return subprocess.call(['git', 'clone'])
+    repo_path = get_repo_path(root, argv[-1])
+    dirname = os.path.dirname(repo_path)
+    if os.path.exists(repo_path) and len(os.listdir(repo_path)) > 0:
+        sys.stderr.write("{0}: repository exists: {1}\n".format(prog, repo_path))
+        return 1
+
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    try:
+        return subprocess.call(['git', 'clone'] + argv + [repo_path])
+    except KeyboardInterrupt:
+        return 1
+
+
+def get_repo_path(root, repo):
+    """Get repository filesystem path
+
+    Determine the format of the git repository URL and figure out the hostname,
+    path and name of repository to create the path where the repository should
+    be stored.
+
+    >>> get_repo_path('/usr/src', 'https://scm.com/x/y')
+    '/usr/src/scm.com/x/y'
+    >>> get_repo_path('/usr/src', 'https://scm.com/x/yz')
+    '/usr/src/scm.com/x/yz'
+    >>> get_repo_path('/usr/src', 'https://scm.com/x/yt')
+    '/usr/src/scm.com/x/yt'
+    >>> get_repo_path('/usr/src', 'https://scm.com/x/y.git')
+    '/usr/src/scm.com/x/y'
+    >>> get_repo_path('/usr/src', 'https://user@scm.com/x/y')
+    '/usr/src/scm.com/x/y'
+    >>> get_repo_path('/usr/src', 'ssh://user@scm.com/x/y')
+    '/usr/src/scm.com/x/y'
+    >>> get_repo_path('/usr/src', 'ssh://user@scm.com:81/x/y')
+    '/usr/src/scm.com:81/x/y'
+    >>> get_repo_path('/usr/src', 'ssh+x://user@scm.com/x/y')
+    '/usr/src/scm.com/x/y'
+    >>> get_repo_path('/usr/src', 'git://scm.com/x/y')
+    '/usr/src/scm.com/x/y'
+    >>> get_repo_path('/usr/src', 'scm.com:x/y')
+    '/usr/src/scm.com/x/y'
+    >>> get_repo_path('/usr/src', 'u@scm.com:x/y')
+    '/usr/src/scm.com/x/y'
+    """
+    p = urlparse(repo)
+    if p.netloc:
+        host, path = p.netloc, p.path
+    else:
+        host, _, path = repo.partition(':')
+        assert host and path, 'unsupported format'
+    host = host.split('@')[-1]
+    dirname = os.path.dirname(path)
+    basename = os.path.basename(path)
+    if basename.endswith('.git'):
+        basename = basename[:-4]
+    return os.path.join(root, host.lstrip('/'), dirname.lstrip('/'), basename)
+
+
+if __name__ == '__main__':
+    import doctest
+    err, _ = doctest.testmod()
+    if err:
+        sys.exit(1)
+    else:
+        sys.exit(main())
