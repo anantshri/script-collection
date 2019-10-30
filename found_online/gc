@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# based on 
 # -*- coding: utf-8 -*-
 #
 # git-dolly -- Clone a git repository and retain directory structure
@@ -28,15 +29,16 @@ def main():
     root = os.getenv('GIT_DOLLY_PATH', os.path.expanduser('~/WORK/'))
     prog = os.path.basename(sys.argv[0])
     argv = sys.argv[2:] if sys.argv[0] == 'git' else sys.argv[1:]
-
+    # capture the url for further processing if no url show git clone standard error message
     if not argv:
         return subprocess.call(['git', 'clone'])
+    argv[0]=argv[0].replace("https","ssh").replace("http","ssh")
     repo_path = get_repo_path(root, argv[-1])
     dirname = os.path.dirname(repo_path)
     if os.path.exists(repo_path) and len(os.listdir(repo_path)) > 0:
         sys.stderr.write("{0}: repository exists: {1}\n".format(prog, repo_path))
         return 1
-
+    
     if not os.path.exists(dirname):
         os.makedirs(dirname)
     try:
