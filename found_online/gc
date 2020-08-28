@@ -3,7 +3,7 @@
 # -*- coding: utf-8 -*-
 #
 # git-dolly -- Clone a git repository and retain directory structure
-#
+# Original https://github.com/op/git-dolly
 # Uses by default "~/src" as the root to where to clone repositories. It then
 # automatically sets up the target directory based on the given URL.
 #
