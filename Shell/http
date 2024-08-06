@@ -1,14 +1,8 @@
 #!/bin/bash
 PORT=${1:-8000}
 shift
-if which python &> /dev/null; then
-	PY=`python -c 'import platform; print(platform.python_version())' | cut -f1 -d"."`
-	if [ $PY == 2 ]
-	then
-		python -m SimpleHTTPServer $PORT $*
-	else
-		python -m http.server $PORT $*
-	fi
+if which python3 &> /dev/null; then
+	python3 -m http.server $PORT $*
 elif which ruby &> /dev/null; then
 	ruby -run -ehttpd . -p$PORT $*
 elif which php &> /dev/null; then

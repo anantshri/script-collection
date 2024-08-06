@@ -1,4 +1,7 @@
-#!/bin/zsh
+#!/bin/bash
 read -p "Enter the password" pass
 read -p "Enter Owner Password" ownerpass
 gs -dNOPAUSE -dBATCH -dNOPAUSE -dQUIET -dCompatibilityLevel=1.4 -sDEVICE=pdfwrite -sOwnerPassword=$ownerpass -sUserPassword=$pass -sOutputFile=$1_enc $1
+# IF you want to use zsh
+# read "?Enter the password" pass
+# read "?Enter Owner Password" ownerpass

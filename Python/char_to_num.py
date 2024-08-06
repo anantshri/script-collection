@@ -18,6 +18,6 @@ def main(argv):
         for m in str(total):
             total1 = total1 + int(m)
         total = total1
-    print "Sum total : " + total
+    print("Sum total : " + str(total))
 if __name__ == "__main__":
    main(sys.argv[1:])
