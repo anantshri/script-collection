@@ -1,0 +1,34 @@
+#!/bin/bash
+url=$1
+regex="^(https?|ftp)://(([a-zA-Z0-9.-]+)|localhost)(:[0-9]+)?(/.*)?$"
+function chrome_set {
+	if [ -f "$HOME/Applications/Chromium.app/Contents/MacOS/Chromium" ]
+then
+	echo "Chromium Found in $HOME/Applications using it"
+	BROWSER="$HOME/Applications/Chromium.app/Contents/MacOS/Chromium"
+elif [ -f "/Applications/Chromium.app/Contents/MacOS/Chromium" ]
+then
+	echo "Chromium Found in /Applications using it"
+	BROWSER="/Applications/Chromium.app/Contents/MacOS/Chromium"
+elif [ -f "$HOME/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]
+then
+	echo "Chrome Found in $HOME/Applications"
+	BROWSER="$HOME/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+elif [ -f "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]
+then
+	echo "Chrome Found in /Applications"
+	BROWSER="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+else
+	echo "Chromium or Chrome browser was not found to be installed"
+	echo "Please install it to use this script properly"
+	exit
+fi
+
+}
+chrome_set
+if [[ $url =~ $regex ]]; then
+  	echo "The input is a URL"
+		$BROWSER --app="$url" --disable-gpu --disable-force-compositing-mode --disable-software-rasterizer
+else
+  echo "The input is not a URL"
+fi
