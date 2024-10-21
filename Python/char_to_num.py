@@ -1,4 +1,4 @@
-#!/usr/bin/python -tt
+#!/usr/local/bin/python3 -tt
 import os
 import argparse
 import sys
