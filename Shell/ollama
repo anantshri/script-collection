@@ -1,0 +1,396 @@
+#!/bin/bash
+#
+# ollama-script - Drop-in replacement for ollama command
+# Automatically selects the best available Ollama instance
+#
+# Priority: AI Server (local network) > AI Server (Tailscale) > Local Ollama
+#
+
+# =============================================================================
+# STRICT MODE & SAFETY
+# =============================================================================
+set -euo pipefail
+
+# =============================================================================
+# EXIT CODES
+# =============================================================================
+readonly EXIT_OK=0
+readonly EXIT_USAGE=64
+readonly EXIT_DEPENDENCY=65
+readonly EXIT_NO_INSTANCE=66
+readonly EXIT_CONNECTION=67
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+readonly AISERVER_LOCAL_IP="${AISERVER_LOCAL_IP:-127.0.0.1}"
+readonly AISERVER_TAILSCALE_IP="${AISERVER_TAILSCALE_IP:-100.100.100.100}"
+readonly AISERVER_PORT="${AISERVER_PORT:-11434}"
+readonly DEBUG="${DEBUG:-false}"
+readonly LOG_FILE="${OLLAMA_SCRIPT_LOG:-/tmp/ollama-script.log}"
+readonly SCRIPT_NAME="$(basename "$0")"
+
+# =============================================================================
+# FIND REAL OLLAMA BINARY (avoid recursion if we're named 'ollama' in PATH)
+# =============================================================================
+find_real_ollama() {
+    local script_dir
+    script_dir="$(cd "$(dirname "$0")" && pwd)"
+
+    # Temporarily remove our directory from PATH to find the real ollama
+    local old_path="$PATH"
+    # Remove our directory from PATH (handles both middle and edge cases)
+    local new_path
+    new_path=$(echo "$PATH" | tr ':' '\n' | grep -v "^${script_dir}$" | tr '\n' ':' | sed 's/:$//')
+
+    export PATH="$new_path"
+    local real_ollama
+    real_ollama=$(command -v ollama 2>/dev/null || true)
+    export PATH="$old_path"
+
+    if [[ -z "$real_ollama" ]]; then
+        echo ""
+        return 1
+    fi
+
+    echo "$real_ollama"
+}
+
+readonly REAL_OLLAMA="$(find_real_ollama)"
+
+# =============================================================================
+# COLORS (disabled if not a terminal)
+# =============================================================================
+if [[ -t 1 ]]; then
+    readonly RED='\033[0;31m'
+    readonly GREEN='\033[0;32m'
+    readonly YELLOW='\033[1;33m'
+    readonly CYAN='\033[0;36m'
+    readonly NC='\033[0m'
+else
+    readonly RED=''
+    readonly GREEN=''
+    readonly YELLOW=''
+    readonly CYAN=''
+    readonly NC=''
+fi
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+log() {
+    local level="$1"
+    shift
+    local ts
+    ts="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    echo "${ts}:::${level}:::${SCRIPT_NAME}:::$*" >> "$LOG_FILE"
+}
+
+debug() {
+    if [[ "$DEBUG" == "true" ]]; then
+        echo -e "${YELLOW}[DEBUG]${NC} $*" >&2
+    fi
+    log "DEBUG" "$*"
+}
+
+info() {
+    log "INFO" "$*"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $*" >&2
+    log "ERROR" "$*"
+}
+
+# =============================================================================
+# DEPENDENCY CHECK
+# =============================================================================
+require_ollama() {
+    if [[ -z "$REAL_OLLAMA" ]]; then
+        error "Cannot find real ollama binary in PATH (excluding wrapper directory)"
+        exit "$EXIT_DEPENDENCY"
+    fi
+    if [[ ! -x "$REAL_OLLAMA" ]]; then
+        error "Found ollama at $REAL_OLLAMA but it's not executable"
+        exit "$EXIT_DEPENDENCY"
+    fi
+    debug "Real ollama binary found: $REAL_OLLAMA"
+}
+
+# =============================================================================
+# CLEANUP
+# =============================================================================
+cleanup() {
+    local exit_code=$?
+    debug "Cleanup called with exit code: $exit_code"
+    # Add any cleanup tasks here
+    exit "$exit_code"
+}
+
+trap cleanup EXIT
+
+# =============================================================================
+# HELP
+# =============================================================================
+print_help() {
+    cat <<EOF
+Usage: ${SCRIPT_NAME} [OPTIONS] [OLLAMA_COMMAND...]
+
+Drop-in replacement for ollama that auto-selects the best instance.
+Priority: AI Server (local network) > AI Server (Tailscale) > Local Ollama
+
+OPTIONS:
+    -s, --status             Show status of all instances
+    -l, --local              Force local Ollama
+    -a, --aiserver           Force AI Server (tries local network first)
+    --aiserver-local         Force AI Server via local network only
+    --aiserver-tailscale     Force AI Server via Tailscale only
+    -q, --quiet              Suppress instance selection message
+    -h, --help               Show this help message
+
+ENVIRONMENT VARIABLES:
+    AISERVER_LOCAL_IP        AI Server's local network IP (default: ${AISERVER_LOCAL_IP})
+    AISERVER_TAILSCALE_IP    AI Server's Tailscale IP (default: ${AISERVER_TAILSCALE_IP})
+    AISERVER_PORT            Ollama port on AI Server (default: ${AISERVER_PORT})
+    DEBUG                 Enable debug output (default: false)
+    OLLAMA_SCRIPT_LOG     Log file path (default: /tmp/ollama-script.log)
+
+EXAMPLES:
+    ${SCRIPT_NAME} list                  # Auto-select, list models
+    ${SCRIPT_NAME} run llama3            # Auto-select, run model
+    ${SCRIPT_NAME} -a pull mistral       # Force AI Server, pull model
+    ${SCRIPT_NAME} --local run phi       # Force local, run model
+    ${SCRIPT_NAME} -q list               # Quiet mode, no header
+
+EXIT CODES:
+    0   Success
+    64  Usage error
+    65  Missing dependency
+    66  No Ollama instance available
+    67  Connection error
+
+EOF
+}
+
+# =============================================================================
+# CORE FUNCTIONS
+# =============================================================================
+
+# Check if an Ollama instance is reachable
+# Args: $1 = host:port (empty for local default)
+# Returns: 0 if reachable, 1 otherwise
+check_ollama() {
+    local host="${1:-}"
+    if [[ -z "$host" ]]; then
+        debug "Checking local Ollama (default)"
+        if "$REAL_OLLAMA" list &>/dev/null; then
+            debug "Local Ollama reachable"
+            return 0
+        fi
+        debug "Local Ollama not reachable"
+        return 1
+    fi
+    debug "Checking Ollama at: $host"
+    if OLLAMA_HOST="$host" "$REAL_OLLAMA" list &>/dev/null; then
+        debug "Ollama reachable at: $host"
+        return 0
+    fi
+    debug "Ollama not reachable at: $host"
+    return 1
+}
+
+# Select the best available instance
+# Returns: instance identifier string
+select_instance() {
+    debug "Selecting best available instance..."
+
+    # Priority 1: AI Server on local network
+    if check_ollama "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
+        info "Selected instance: aiserver-local"
+        echo "aiserver-local"
+        return
+    fi
+
+    # Priority 2: AI Server via Tailscale
+    if check_ollama "${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"; then
+        info "Selected instance: aiserver-tailscale"
+        echo "aiserver-tailscale"
+        return
+    fi
+
+    # Priority 3: Local Ollama (uses default localhost:11434)
+    if check_ollama; then
+        info "Selected instance: local"
+        echo "local"
+        return
+    fi
+
+    echo "none"
+}
+
+# Get host string for instance
+# Args: $1 = instance identifier
+# Returns: host:port string, or empty for local (uses default)
+get_host() {
+    local instance="$1"
+    case "$instance" in
+        aiserver-local)     echo "${AISERVER_LOCAL_IP}:${AISERVER_PORT}" ;;
+        aiserver-tailscale) echo "${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}" ;;
+        local)           echo "" ;;
+        *)               error "Unknown instance: $instance"; return 1 ;;
+    esac
+}
+
+# Get display name for instance
+# Args: $1 = instance identifier
+get_name() {
+    local instance="$1"
+    case "$instance" in
+        aiserver-local)     echo "AI Server (local network)" ;;
+        aiserver-tailscale) echo "AI Server (Tailscale)" ;;
+        local)           echo "Local" ;;
+        *)               echo "Unknown" ;;
+    esac
+}
+
+# Show status of all instances
+show_status() {
+    echo -e "${CYAN}=== Ollama Instances ===${NC}"
+    echo ""
+
+    local aiserver_local_status aiserver_ts_status local_status
+
+    if check_ollama "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
+        aiserver_local_status="${GREEN}[OK]${NC}"
+    else
+        aiserver_local_status="${RED}[X]${NC} "
+    fi
+
+    if check_ollama "${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"; then
+        aiserver_ts_status="${GREEN}[OK]${NC}"
+    else
+        aiserver_ts_status="${RED}[X]${NC} "
+    fi
+
+    if check_ollama; then
+        local_status="${GREEN}[OK]${NC}"
+    else
+        local_status="${RED}[X]${NC} "
+    fi
+
+    echo -e "  ${aiserver_local_status} AI Server (local)     ${AISERVER_LOCAL_IP}:${AISERVER_PORT}"
+    echo -e "  ${aiserver_ts_status} AI Server (Tailscale) ${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"
+    echo -e "  ${local_status} Local             localhost (default)"
+    echo ""
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+main() {
+    # Check dependencies
+    require_ollama
+
+    # Parse arguments
+    local force_instance=""
+    local quiet="false"
+    local ollama_args=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -s|--status)
+                show_status
+                exit "$EXIT_OK"
+                ;;
+            -h|--help)
+                print_help
+                exit "$EXIT_OK"
+                ;;
+            -l|--local)
+                force_instance="local"
+                shift
+                ;;
+            -a|--aiserver)
+                # Try local network first, then Tailscale
+                if check_ollama "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
+                    force_instance="aiserver-local"
+                else
+                    force_instance="aiserver-tailscale"
+                fi
+                shift
+                ;;
+            --aiserver-local)
+                force_instance="aiserver-local"
+                shift
+                ;;
+            --aiserver-tailscale)
+                force_instance="aiserver-tailscale"
+                shift
+                ;;
+            -q|--quiet)
+                quiet="true"
+                shift
+                ;;
+            --)
+                shift
+                ollama_args+=("$@")
+                break
+                ;;
+            -*)
+                # Unknown option - pass to ollama
+                ollama_args+=("$1")
+                shift
+                ;;
+            *)
+                ollama_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    # If no ollama command given, show help
+    if [[ ${#ollama_args[@]} -eq 0 ]]; then
+        print_help
+        exit "$EXIT_USAGE"
+    fi
+
+    # Select instance
+    local instance
+    if [[ -n "$force_instance" ]]; then
+        instance="$force_instance"
+        debug "Using forced instance: $instance"
+    else
+        instance=$(select_instance)
+    fi
+
+    if [[ "$instance" == "none" ]]; then
+        error "No Ollama instance available"
+        show_status
+        exit "$EXIT_NO_INSTANCE"
+    fi
+
+    # Get host and run command
+    local host name
+    host=$(get_host "$instance")
+    name=$(get_name "$instance")
+
+    if [[ "$quiet" != "true" ]]; then
+        if [[ -n "$host" ]]; then
+            echo -e "${CYAN}→ ${name}${NC} (${host})"
+        else
+            echo -e "${CYAN}→ ${name}${NC}"
+        fi
+    fi
+
+    # Execute ollama command with real binary
+    if [[ -n "$host" ]]; then
+        info "Executing: $REAL_OLLAMA ${ollama_args[*]} on $host"
+        OLLAMA_HOST="$host" "$REAL_OLLAMA" "${ollama_args[@]}"
+    else
+        info "Executing: $REAL_OLLAMA ${ollama_args[*]} (local default)"
+        "$REAL_OLLAMA" "${ollama_args[@]}"
+    fi
+}
+
+# Run main function with all arguments
+main "$@"
