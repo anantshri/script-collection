@@ -1,0 +1,325 @@
+#!/bin/bash
+#
+# claude-local - Launch Claude Code with the best available Ollama backend
+#
+# Checks for model availability and selects:
+# Priority: AI Server (local network) > AI Server (Tailscale) > Local Ollama
+#
+
+# =============================================================================
+# STRICT MODE & SAFETY
+# =============================================================================
+set -euo pipefail
+
+# =============================================================================
+# EXIT CODES
+# =============================================================================
+readonly EXIT_OK=0
+readonly EXIT_DEPENDENCY=65
+readonly EXIT_NO_INSTANCE=66
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+readonly AISERVER_LOCAL_IP="${AISERVER_LOCAL_IP:-127.0.0.1}"
+readonly AISERVER_TAILSCALE_IP="${AISERVER_TAILSCALE_IP:-100.100.100.100}"
+readonly AISERVER_PORT="${AISERVER_PORT:-11434}"
+MODEL="${CLAUDE_LOCAL_MODEL:-qwen3-coder:30b}"  # Not readonly - can be overridden with -m
+readonly DEBUG="${DEBUG:-false}"
+readonly SCRIPT_NAME="$(basename "$0")"
+
+# =============================================================================
+# COLORS (disabled if not a terminal)
+# =============================================================================
+if [[ -t 1 ]]; then
+    readonly RED='\033[0;31m'
+    readonly GREEN='\033[0;32m'
+    readonly YELLOW='\033[1;33m'
+    readonly CYAN='\033[0;36m'
+    readonly NC='\033[0m'
+else
+    readonly RED=''
+    readonly GREEN=''
+    readonly YELLOW=''
+    readonly CYAN=''
+    readonly NC=''
+fi
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+debug() {
+    if [[ "$DEBUG" == "true" ]]; then
+        echo -e "${YELLOW}[DEBUG]${NC} $*" >&2
+    fi
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $*" >&2
+}
+
+# =============================================================================
+# DEPENDENCY CHECK
+# =============================================================================
+check_dependencies() {
+    if ! command -v claude &>/dev/null; then
+        error "claude command not found in PATH"
+        exit "$EXIT_DEPENDENCY"
+    fi
+    if ! command -v ollama &>/dev/null; then
+        error "ollama command not found in PATH"
+        exit "$EXIT_DEPENDENCY"
+    fi
+}
+
+# =============================================================================
+# HELP
+# =============================================================================
+print_help() {
+    cat <<EOF
+Usage: ${SCRIPT_NAME} [OPTIONS] [CLAUDE_ARGS...]
+
+Launch Claude Code with the best available Ollama backend.
+Priority: AI Server (local network) > AI Server (Tailscale) > Local Ollama
+
+OPTIONS:
+    -s, --status             Show status of all instances
+    -l, --local              Force local Ollama
+    -a, --aiserver           Force AI Server (tries local network first)
+    --aiserver-local         Force AI Server via local network only
+    --aiserver-tailscale     Force AI Server via Tailscale only
+    -m, --model MODEL        Use specific model (default: ${MODEL})
+    -q, --quiet              Suppress instance selection message
+    -h, --help               Show this help message
+
+ENVIRONMENT VARIABLES:
+    AISERVER_LOCAL_IP        AI Server's local network IP (default: ${AISERVER_LOCAL_IP})
+    AISERVER_TAILSCALE_IP    AI Server's Tailscale IP (default: ${AISERVER_TAILSCALE_IP})
+    AISERVER_PORT            Ollama port on AI Server (default: ${AISERVER_PORT})
+    CLAUDE_LOCAL_MODEL       Model to use (default: qwen3-coder:30b)
+    DEBUG                    Enable debug output (default: false)
+
+EXAMPLES:
+    ${SCRIPT_NAME}                       # Auto-select, launch claude
+    ${SCRIPT_NAME} -a                    # Force AI Server
+    ${SCRIPT_NAME} -m qwen3:32b          # Use different model
+    ${SCRIPT_NAME} -s                    # Show instance status
+    ${SCRIPT_NAME} -- --help             # Pass --help to claude
+
+EOF
+}
+
+# =============================================================================
+# CORE FUNCTIONS
+# =============================================================================
+
+# Check if model is available on an Ollama instance
+# Args: $1 = host:port (empty for local default)
+# Returns: 0 if model available, 1 otherwise
+check_model() {
+    local host="${1:-}"
+    local model_list
+
+    if [[ -z "$host" ]]; then
+        debug "Checking model '$MODEL' on local Ollama"
+        model_list=$(ollama list 2>/dev/null) || return 1
+    else
+        debug "Checking model '$MODEL' at $host"
+        model_list=$(OLLAMA_HOST="$host" ollama list 2>/dev/null) || return 1
+    fi
+
+    if echo "$model_list" | grep -q "^${MODEL}"; then
+        debug "Model '$MODEL' found"
+        return 0
+    fi
+    debug "Model '$MODEL' not found"
+    return 1
+}
+
+# Select the best available instance with the model
+# Returns: instance identifier string
+select_instance() {
+    debug "Selecting best available instance with model '$MODEL'..."
+
+    # Priority 1: AI Server on local network
+    if check_model "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
+        echo "aiserver-local"
+        return
+    fi
+
+    # Priority 2: AI Server via Tailscale
+    if check_model "${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"; then
+        echo "aiserver-tailscale"
+        return
+    fi
+
+    # Priority 3: Local Ollama
+    if check_model; then
+        echo "local"
+        return
+    fi
+
+    echo "none"
+}
+
+# Get base URL for instance
+# Args: $1 = instance identifier
+get_base_url() {
+    local instance="$1"
+    case "$instance" in
+        aiserver-local)     echo "http://${AISERVER_LOCAL_IP}:${AISERVER_PORT}" ;;
+        aiserver-tailscale) echo "http://${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}" ;;
+        local)              echo "http://localhost:11434" ;;
+        *)                  error "Unknown instance: $instance"; return 1 ;;
+    esac
+}
+
+# Get display name for instance
+# Args: $1 = instance identifier
+get_name() {
+    local instance="$1"
+    case "$instance" in
+        aiserver-local)     echo "AI Server (local network)" ;;
+        aiserver-tailscale) echo "AI Server (Tailscale)" ;;
+        local)              echo "Local" ;;
+        *)                  echo "Unknown" ;;
+    esac
+}
+
+# Show status of all instances
+show_status() {
+    echo -e "${CYAN}=== Ollama Instances (model: ${MODEL}) ===${NC}"
+    echo ""
+
+    local aiserver_local_status aiserver_ts_status local_status
+
+    if check_model "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
+        aiserver_local_status="${GREEN}[OK]${NC}"
+    else
+        aiserver_local_status="${RED}[X]${NC} "
+    fi
+
+    if check_model "${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"; then
+        aiserver_ts_status="${GREEN}[OK]${NC}"
+    else
+        aiserver_ts_status="${RED}[X]${NC} "
+    fi
+
+    if check_model; then
+        local_status="${GREEN}[OK]${NC}"
+    else
+        local_status="${RED}[X]${NC} "
+    fi
+
+    echo -e "  ${aiserver_local_status} AI Server (local)     ${AISERVER_LOCAL_IP}:${AISERVER_PORT}"
+    echo -e "  ${aiserver_ts_status} AI Server (Tailscale) ${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"
+    echo -e "  ${local_status} Local                 localhost:11434"
+    echo ""
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+main() {
+    check_dependencies
+
+    # Pre-scan for model override (need to apply before other checks)
+    local args=("$@")
+    for ((i=0; i<${#args[@]}; i++)); do
+        if [[ "${args[i]}" == "-m" || "${args[i]}" == "--model" ]]; then
+            MODEL="${args[i+1]}"
+            break
+        fi
+    done
+
+    # Parse arguments
+    local force_instance=""
+    local quiet="false"
+    local claude_args=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -s|--status)
+                show_status
+                exit "$EXIT_OK"
+                ;;
+            -h|--help)
+                print_help
+                exit "$EXIT_OK"
+                ;;
+            -l|--local)
+                force_instance="local"
+                shift
+                ;;
+            -a|--aiserver)
+                if check_model "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
+                    force_instance="aiserver-local"
+                else
+                    force_instance="aiserver-tailscale"
+                fi
+                shift
+                ;;
+            --aiserver-local)
+                force_instance="aiserver-local"
+                shift
+                ;;
+            --aiserver-tailscale)
+                force_instance="aiserver-tailscale"
+                shift
+                ;;
+            -m|--model)
+                # Already processed in pre-scan
+                shift 2
+                ;;
+            -q|--quiet)
+                quiet="true"
+                shift
+                ;;
+            --)
+                shift
+                claude_args+=("$@")
+                break
+                ;;
+            *)
+                claude_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    # Select instance
+    local instance
+    if [[ -n "$force_instance" ]]; then
+        instance="$force_instance"
+        debug "Using forced instance: $instance"
+    else
+        instance=$(select_instance)
+    fi
+
+    if [[ "$instance" == "none" ]]; then
+        error "No Ollama instance available with model '$MODEL'"
+        show_status
+        exit "$EXIT_NO_INSTANCE"
+    fi
+
+    # Get connection info
+    local base_url name
+    base_url=$(get_base_url "$instance")
+    name=$(get_name "$instance")
+
+    if [[ "$quiet" != "true" ]]; then
+        echo -e "${CYAN}→ ${name}${NC} (${base_url})"
+        echo -e "${CYAN}  Model: ${MODEL}${NC}"
+    fi
+
+    # Launch claude with Ollama backend
+    export ANTHROPIC_AUTH_TOKEN="ollama"
+    export ANTHROPIC_BASE_URL="$base_url"
+    export ANTHROPIC_MODEL="$MODEL"
+
+    debug "Launching claude with ANTHROPIC_BASE_URL=$base_url ANTHROPIC_MODEL=$MODEL"
+
+    exec claude "${claude_args[@]+"${claude_args[@]}"}"
+}
+
+main "$@"
