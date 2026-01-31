@@ -1,9 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # claude-local - Launch Claude Code with the best available Ollama backend
 #
-# Checks for model availability and selects:
-# Priority: AI Server (local network) > AI Server (Tailscale) > Local Ollama
+# Discovery priority:
+# 1. AI Server via local network (by hostname)
+# 2. AI Server via Tailscale (by hostname, then IP lookup)
+# 3. Local Ollama (localhost)
 #
 
 # =============================================================================
@@ -21,12 +23,22 @@ readonly EXIT_NO_INSTANCE=66
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-readonly AISERVER_LOCAL_IP="${AISERVER_LOCAL_IP:-127.0.0.1}"
-readonly AISERVER_TAILSCALE_IP="${AISERVER_TAILSCALE_IP:-100.100.100.100}"
+# Hostname of AI server on local network (e.g., aiserver.local, aiserver)
+readonly AISERVER_HOSTNAME="${AISERVER_HOSTNAME:-}"
+# Fallback IP address if hostname doesn't resolve
+readonly AISERVER_LOCAL_IP="${AISERVER_LOCAL_IP:-}"
+# Tailscale machine name of AI server (used for MagicDNS and IP lookup)
+readonly AISERVER_TAILSCALE_NAME="${AISERVER_TAILSCALE_NAME:-}"
+# Ollama port on AI server
 readonly AISERVER_PORT="${AISERVER_PORT:-11434}"
+# Model to use
 MODEL="${CLAUDE_LOCAL_MODEL:-qwen3-coder:30b}"  # Not readonly - can be overridden with -m
 readonly DEBUG="${DEBUG:-false}"
 readonly SCRIPT_NAME="$(basename "$0")"
+
+# Runtime state (populated during discovery)
+RESOLVED_HOST=""
+RESOLVED_METHOD=""
 
 # =============================================================================
 # COLORS (disabled if not a terminal)
@@ -36,12 +48,14 @@ if [[ -t 1 ]]; then
     readonly GREEN='\033[0;32m'
     readonly YELLOW='\033[1;33m'
     readonly CYAN='\033[0;36m'
+    readonly DIM='\033[2m'
     readonly NC='\033[0m'
 else
     readonly RED=''
     readonly GREEN=''
     readonly YELLOW=''
     readonly CYAN=''
+    readonly DIM=''
     readonly NC=''
 fi
 
@@ -56,6 +70,10 @@ debug() {
 
 error() {
     echo -e "${RED}[ERROR]${NC} $*" >&2
+}
+
+warn() {
+    echo -e "${YELLOW}[WARN]${NC} $*" >&2
 }
 
 # =============================================================================
@@ -73,61 +91,106 @@ check_dependencies() {
 }
 
 # =============================================================================
-# HELP
+# NETWORK DISCOVERY FUNCTIONS
 # =============================================================================
-print_help() {
-    cat <<EOF
-Usage: ${SCRIPT_NAME} [OPTIONS] [CLAUDE_ARGS...]
 
-Launch Claude Code with the best available Ollama backend.
-Priority: AI Server (local network) > AI Server (Tailscale) > Local Ollama
+# Find Tailscale binary (OS-aware lookup)
+# Returns: path to tailscale binary, or empty if not found
+TAILSCALE_BIN=""
+find_tailscale() {
+    if [[ -n "$TAILSCALE_BIN" ]]; then
+        echo "$TAILSCALE_BIN"
+        return 0
+    fi
+    
+    local os_type
+    os_type="$(uname -s)"
+    
+    case "$os_type" in
+        Darwin)
+            # macOS: Check app bundle first (default install location)
+            local macos_path="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+            if [[ -x "$macos_path" ]]; then
+                TAILSCALE_BIN="$macos_path"
+                debug "Found tailscale at macOS app location"
+                echo "$TAILSCALE_BIN"
+                return 0
+            fi
+            ;;
+    esac
+    
+    # All platforms: Check PATH
+    if command -v tailscale &>/dev/null; then
+        TAILSCALE_BIN="tailscale"
+        debug "Found tailscale in PATH"
+        echo "$TAILSCALE_BIN"
+        return 0
+    fi
+    
+    debug "Tailscale not found on $os_type"
+    return 1
+}
 
-OPTIONS:
-    -s, --status             Show status of all instances
-    -l, --local              Force local Ollama
-    -a, --aiserver           Force AI Server (tries local network first)
-    --aiserver-local         Force AI Server via local network only
-    --aiserver-tailscale     Force AI Server via Tailscale only
-    -m, --model MODEL        Use specific model (default: ${MODEL})
-    -q, --quiet              Suppress instance selection message
-    -h, --help               Show this help message
+# Check if Tailscale is installed and running
+# Returns: 0 if running, 1 otherwise
+is_tailscale_running() {
+    local ts_bin
+    ts_bin=$(find_tailscale) || {
+        debug "Tailscale not installed"
+        return 1
+    }
+    
+    # Check if tailscale is connected
+    if "$ts_bin" status &>/dev/null; then
+        debug "Tailscale is running"
+        return 0
+    fi
+    
+    debug "Tailscale not running or not connected"
+    return 1
+}
 
-ENVIRONMENT VARIABLES:
-    AISERVER_LOCAL_IP        AI Server's local network IP (default: ${AISERVER_LOCAL_IP})
-    AISERVER_TAILSCALE_IP    AI Server's Tailscale IP (default: ${AISERVER_TAILSCALE_IP})
-    AISERVER_PORT            Ollama port on AI Server (default: ${AISERVER_PORT})
-    CLAUDE_LOCAL_MODEL       Model to use (default: qwen3-coder:30b)
-    DEBUG                    Enable debug output (default: false)
-
-EXAMPLES:
-    ${SCRIPT_NAME}                       # Auto-select, launch claude
-    ${SCRIPT_NAME} -a                    # Force AI Server
-    ${SCRIPT_NAME} -m qwen3:32b          # Use different model
-    ${SCRIPT_NAME} -s                    # Show instance status
-    ${SCRIPT_NAME} -- --help             # Pass --help to claude
-
-EOF
+# Get Tailscale IP for a machine name
+# Args: $1 = machine name
+# Returns: IP address on stdout, or fails
+get_tailscale_ip() {
+    local name="$1"
+    local ts_bin ip
+    
+    ts_bin=$(find_tailscale) || return 1
+    
+    ip=$("$ts_bin" ip -4 "$name" 2>/dev/null) || return 1
+    
+    if [[ -n "$ip" ]]; then
+        debug "Resolved Tailscale IP for '$name': $ip"
+        echo "$ip"
+        return 0
+    fi
+    
+    return 1
 }
 
 # =============================================================================
-# CORE FUNCTIONS
+# MODEL CHECKING
 # =============================================================================
 
 # Check if model is available on an Ollama instance
-# Args: $1 = host:port (empty for local default)
+# Args: $1 = host (hostname or IP, empty for localhost)
 # Returns: 0 if model available, 1 otherwise
 check_model() {
     local host="${1:-}"
     local model_list
-
+    local ollama_host
+    
     if [[ -z "$host" ]]; then
-        debug "Checking model '$MODEL' on local Ollama"
+        debug "Checking model '$MODEL' on localhost"
         model_list=$(ollama list 2>/dev/null) || return 1
     else
-        debug "Checking model '$MODEL' at $host"
-        model_list=$(OLLAMA_HOST="$host" ollama list 2>/dev/null) || return 1
+        ollama_host="${host}:${AISERVER_PORT}"
+        debug "Checking model '$MODEL' at $ollama_host"
+        model_list=$(OLLAMA_HOST="$ollama_host" ollama list 2>/dev/null) || return 1
     fi
-
+    
     if echo "$model_list" | grep -q "^${MODEL}"; then
         debug "Model '$MODEL' found"
         return 0
@@ -136,85 +199,259 @@ check_model() {
     return 1
 }
 
-# Select the best available instance with the model
-# Returns: instance identifier string
-select_instance() {
-    debug "Selecting best available instance with model '$MODEL'..."
+# =============================================================================
+# INSTANCE DISCOVERY
+# =============================================================================
 
-    # Priority 1: AI Server on local network
-    if check_model "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
-        echo "aiserver-local"
-        return
+# Try to discover AI server on local network
+# Returns: 0 if found (sets RESOLVED_HOST and RESOLVED_METHOD), 1 otherwise
+try_local_network() {
+    if [[ -z "$AISERVER_HOSTNAME" ]] && [[ -z "$AISERVER_LOCAL_IP" ]]; then
+        debug "Neither AISERVER_HOSTNAME nor AISERVER_LOCAL_IP configured, skipping local network"
+        return 1
     fi
-
-    # Priority 2: AI Server via Tailscale
-    if check_model "${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"; then
-        echo "aiserver-tailscale"
-        return
+    
+    # Try 1: Hostname
+    if [[ -n "$AISERVER_HOSTNAME" ]]; then
+        debug "Trying local network hostname: $AISERVER_HOSTNAME"
+        if check_model "$AISERVER_HOSTNAME"; then
+            RESOLVED_HOST="$AISERVER_HOSTNAME"
+            RESOLVED_METHOD="local-hostname"
+            debug "Found AI server on local network at $AISERVER_HOSTNAME"
+            return 0
+        fi
     fi
-
-    # Priority 3: Local Ollama
-    if check_model; then
-        echo "local"
-        return
+    
+    # Try 2: Fallback to IP
+    if [[ -n "$AISERVER_LOCAL_IP" ]]; then
+        debug "Trying local network IP fallback: $AISERVER_LOCAL_IP"
+        if check_model "$AISERVER_LOCAL_IP"; then
+            RESOLVED_HOST="$AISERVER_LOCAL_IP"
+            RESOLVED_METHOD="local-ip"
+            debug "Found AI server on local network at $AISERVER_LOCAL_IP"
+            return 0
+        fi
     fi
-
-    echo "none"
+    
+    debug "AI server not reachable on local network"
+    return 1
 }
 
-# Get base URL for instance
-# Args: $1 = instance identifier
+# Try to discover AI server via Tailscale
+# Returns: 0 if found (sets RESOLVED_HOST and RESOLVED_METHOD), 1 otherwise
+try_tailscale() {
+    if [[ -z "$AISERVER_TAILSCALE_NAME" ]]; then
+        debug "AISERVER_TAILSCALE_NAME not configured, skipping Tailscale"
+        return 1
+    fi
+    
+    if ! is_tailscale_running; then
+        debug "Tailscale not available"
+        return 1
+    fi
+    
+    # Try 1: Tailscale hostname (MagicDNS)
+    debug "Trying Tailscale MagicDNS: $AISERVER_TAILSCALE_NAME"
+    if check_model "$AISERVER_TAILSCALE_NAME"; then
+        RESOLVED_HOST="$AISERVER_TAILSCALE_NAME"
+        RESOLVED_METHOD="tailscale-dns"
+        debug "Found AI server via Tailscale MagicDNS"
+        return 0
+    fi
+    
+    # Try 2: Get Tailscale IP via lookup
+    debug "Trying Tailscale IP lookup for: $AISERVER_TAILSCALE_NAME"
+    local ts_ip
+    if ts_ip=$(get_tailscale_ip "$AISERVER_TAILSCALE_NAME"); then
+        if check_model "$ts_ip"; then
+            RESOLVED_HOST="$ts_ip"
+            RESOLVED_METHOD="tailscale-ip"
+            debug "Found AI server via Tailscale IP: $ts_ip"
+            return 0
+        fi
+    fi
+    
+    debug "AI server not reachable via Tailscale"
+    return 1
+}
+
+# Try localhost
+# Returns: 0 if found (sets RESOLVED_HOST and RESOLVED_METHOD), 1 otherwise
+try_localhost() {
+    debug "Trying localhost"
+    
+    if check_model; then
+        RESOLVED_HOST="localhost"
+        RESOLVED_METHOD="localhost"
+        return 0
+    fi
+    
+    debug "Local Ollama not available"
+    return 1
+}
+
+# =============================================================================
+# URL AND DISPLAY HELPERS
+# =============================================================================
+
+# Get base URL for the resolved host
 get_base_url() {
-    local instance="$1"
-    case "$instance" in
-        aiserver-local)     echo "http://${AISERVER_LOCAL_IP}:${AISERVER_PORT}" ;;
-        aiserver-tailscale) echo "http://${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}" ;;
-        local)              echo "http://localhost:11434" ;;
-        *)                  error "Unknown instance: $instance"; return 1 ;;
-    esac
+    if [[ "$RESOLVED_HOST" == "localhost" ]]; then
+        echo "http://localhost:11434"
+    else
+        echo "http://${RESOLVED_HOST}:${AISERVER_PORT}"
+    fi
 }
 
 # Get display name for instance
 # Args: $1 = instance identifier
-get_name() {
+get_display_name() {
     local instance="$1"
     case "$instance" in
-        aiserver-local)     echo "AI Server (local network)" ;;
-        aiserver-tailscale) echo "AI Server (Tailscale)" ;;
-        local)              echo "Local" ;;
-        *)                  echo "Unknown" ;;
+        aiserver-local)
+            echo "AI Server (local network: ${RESOLVED_HOST})"
+            ;;
+        aiserver-tailscale)
+            if [[ "$RESOLVED_METHOD" == "tailscale-dns" ]]; then
+                echo "AI Server (Tailscale DNS: ${RESOLVED_HOST})"
+            else
+                echo "AI Server (Tailscale IP: ${RESOLVED_HOST})"
+            fi
+            ;;
+        local)
+            echo "Local Ollama"
+            ;;
+        *)
+            echo "Unknown"
+            ;;
     esac
 }
 
-# Show status of all instances
+# =============================================================================
+# STATUS DISPLAY
+# =============================================================================
 show_status() {
-    echo -e "${CYAN}=== Ollama Instances (model: ${MODEL}) ===${NC}"
+    echo -e "${CYAN}=== Ollama Instance Discovery (model: ${MODEL}) ===${NC}"
     echo ""
-
-    local aiserver_local_status aiserver_ts_status local_status
-
-    if check_model "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
-        aiserver_local_status="${GREEN}[OK]${NC}"
+    
+    # Local network status
+    echo -e "${CYAN}Local Network:${NC}"
+    if [[ -n "$AISERVER_HOSTNAME" ]]; then
+        if check_model "$AISERVER_HOSTNAME"; then
+            echo -e "  ${GREEN}[OK]${NC} Hostname: $AISERVER_HOSTNAME:${AISERVER_PORT}"
+        else
+            echo -e "  ${RED}[X]${NC}  Hostname: $AISERVER_HOSTNAME:${AISERVER_PORT} ${DIM}(not reachable or model not found)${NC}"
+        fi
     else
-        aiserver_local_status="${RED}[X]${NC} "
+        echo -e "  ${DIM}[--] Hostname: Not configured (set AISERVER_HOSTNAME)${NC}"
     fi
-
-    if check_model "${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"; then
-        aiserver_ts_status="${GREEN}[OK]${NC}"
+    if [[ -n "$AISERVER_LOCAL_IP" ]]; then
+        if check_model "$AISERVER_LOCAL_IP"; then
+            echo -e "  ${GREEN}[OK]${NC} IP fallback: $AISERVER_LOCAL_IP:${AISERVER_PORT}"
+        else
+            echo -e "  ${RED}[X]${NC}  IP fallback: $AISERVER_LOCAL_IP:${AISERVER_PORT} ${DIM}(not reachable or model not found)${NC}"
+        fi
     else
-        aiserver_ts_status="${RED}[X]${NC} "
+        echo -e "  ${DIM}[--] IP fallback: Not configured (set AISERVER_LOCAL_IP)${NC}"
     fi
-
+    echo ""
+    
+    # Tailscale status
+    echo -e "${CYAN}Tailscale:${NC}"
+    if [[ -n "$AISERVER_TAILSCALE_NAME" ]]; then
+        if is_tailscale_running; then
+            echo -e "  ${GREEN}[OK]${NC} Tailscale is running"
+            
+            # Try MagicDNS
+            if check_model "$AISERVER_TAILSCALE_NAME"; then
+                echo -e "  ${GREEN}[OK]${NC} MagicDNS: $AISERVER_TAILSCALE_NAME:${AISERVER_PORT}"
+            else
+                echo -e "  ${RED}[X]${NC}  MagicDNS: $AISERVER_TAILSCALE_NAME ${DIM}(not reachable)${NC}"
+            fi
+            
+            # Try IP lookup
+            local ts_ip
+            if ts_ip=$(get_tailscale_ip "$AISERVER_TAILSCALE_NAME" 2>/dev/null); then
+                if check_model "$ts_ip"; then
+                    echo -e "  ${GREEN}[OK]${NC} IP lookup: $ts_ip:${AISERVER_PORT}"
+                else
+                    echo -e "  ${RED}[X]${NC}  IP lookup: $ts_ip ${DIM}(not reachable or model not found)${NC}"
+                fi
+            else
+                echo -e "  ${RED}[X]${NC}  IP lookup: ${DIM}(machine '$AISERVER_TAILSCALE_NAME' not found)${NC}"
+            fi
+        else
+            echo -e "  ${RED}[X]${NC}  Tailscale not running"
+        fi
+    else
+        echo -e "  ${DIM}[--] Not configured (set AISERVER_TAILSCALE_NAME)${NC}"
+    fi
+    echo ""
+    
+    # Localhost status
+    echo -e "${CYAN}Localhost:${NC}"
     if check_model; then
-        local_status="${GREEN}[OK]${NC}"
+        echo -e "  ${GREEN}[OK]${NC} localhost:11434"
     else
-        local_status="${RED}[X]${NC} "
+        echo -e "  ${RED}[X]${NC}  localhost:11434 ${DIM}(ollama not running or model not found)${NC}"
     fi
-
-    echo -e "  ${aiserver_local_status} AI Server (local)     ${AISERVER_LOCAL_IP}:${AISERVER_PORT}"
-    echo -e "  ${aiserver_ts_status} AI Server (Tailscale) ${AISERVER_TAILSCALE_IP}:${AISERVER_PORT}"
-    echo -e "  ${local_status} Local                 localhost:11434"
     echo ""
+    
+    # Configuration hint
+    echo -e "${DIM}Configuration:${NC}"
+    echo -e "${DIM}  AISERVER_HOSTNAME=${AISERVER_HOSTNAME:-<not set>}${NC}"
+    echo -e "${DIM}  AISERVER_LOCAL_IP=${AISERVER_LOCAL_IP:-<not set>}${NC}"
+    echo -e "${DIM}  AISERVER_TAILSCALE_NAME=${AISERVER_TAILSCALE_NAME:-<not set>}${NC}"
+    echo -e "${DIM}  AISERVER_PORT=${AISERVER_PORT}${NC}"
+    echo ""
+}
+
+# =============================================================================
+# HELP
+# =============================================================================
+print_help() {
+    cat <<EOF
+Usage: ${SCRIPT_NAME} [OPTIONS] [CLAUDE_ARGS...]
+
+Launch Claude Code with the best available Ollama backend.
+
+Discovery priority:
+  1. AI Server via local network (AISERVER_HOSTNAME)
+  2. AI Server via Tailscale (AISERVER_TAILSCALE_NAME)
+  3. Local Ollama (localhost)
+
+OPTIONS:
+    -s, --status             Show status of all discovery methods
+    -l, --local              Force local Ollama
+    -a, --aiserver           Force AI Server (tries local network, then Tailscale)
+    --aiserver-local         Force AI Server via local network only
+    --aiserver-tailscale     Force AI Server via Tailscale only
+    -m, --model MODEL        Use specific model (default: ${MODEL})
+    -q, --quiet              Suppress instance selection message
+    -h, --help               Show this help message
+
+ENVIRONMENT VARIABLES:
+    AISERVER_HOSTNAME        AI Server's local network hostname (e.g., aiserver.local)
+    AISERVER_LOCAL_IP        Fallback IP if hostname doesn't resolve (e.g., 192.168.1.100)
+    AISERVER_TAILSCALE_NAME  AI Server's Tailscale machine name (for DNS and IP lookup)
+    AISERVER_PORT            Ollama port on AI Server (default: 11434)
+    CLAUDE_LOCAL_MODEL       Model to use (default: qwen3-coder:30b)
+    DEBUG                    Enable debug output (default: false)
+
+EXAMPLES:
+    # Set up (add to ~/.bashrc or ~/.zshrc):
+    export AISERVER_HOSTNAME="aiserver.local"
+    export AISERVER_LOCAL_IP="192.168.1.100"    # Fallback if .local doesn't resolve
+    export AISERVER_TAILSCALE_NAME="aiserver"
+
+    # Usage:
+    ${SCRIPT_NAME}                       # Auto-discover and launch
+    ${SCRIPT_NAME} -s                    # Show discovery status
+    ${SCRIPT_NAME} -a                    # Force AI Server
+    ${SCRIPT_NAME} -m qwen3:32b          # Use different model
+    ${SCRIPT_NAME} -- --help             # Pass --help to claude
+
+EOF
 }
 
 # =============================================================================
@@ -222,21 +459,24 @@ show_status() {
 # =============================================================================
 main() {
     check_dependencies
-
+    
     # Pre-scan for model override (need to apply before other checks)
     local args=("$@")
-    for ((i=0; i<${#args[@]}; i++)); do
+    local num_args=${#args[@]}
+    for ((i=0; i<num_args; i++)); do
         if [[ "${args[i]}" == "-m" || "${args[i]}" == "--model" ]]; then
-            MODEL="${args[i+1]}"
+            if (( i + 1 < num_args )); then
+                MODEL="${args[i+1]}"
+            fi
             break
         fi
     done
-
+    
     # Parse arguments
     local force_instance=""
     local quiet="false"
     local claude_args=()
-
+    
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -s|--status)
@@ -252,18 +492,32 @@ main() {
                 shift
                 ;;
             -a|--aiserver)
-                if check_model "${AISERVER_LOCAL_IP}:${AISERVER_PORT}"; then
+                # Try local network first, then Tailscale
+                if try_local_network; then
                     force_instance="aiserver-local"
-                else
+                elif try_tailscale; then
                     force_instance="aiserver-tailscale"
+                else
+                    error "AI Server not reachable via local network or Tailscale"
+                    exit "$EXIT_NO_INSTANCE"
                 fi
                 shift
                 ;;
             --aiserver-local)
+                if ! try_local_network; then
+                    error "AI Server not reachable via local network"
+                    echo "Check AISERVER_HOSTNAME is set and the server is reachable"
+                    exit "$EXIT_NO_INSTANCE"
+                fi
                 force_instance="aiserver-local"
                 shift
                 ;;
             --aiserver-tailscale)
+                if ! try_tailscale; then
+                    error "AI Server not reachable via Tailscale"
+                    echo "Check AISERVER_TAILSCALE_NAME is set and Tailscale is running"
+                    exit "$EXIT_NO_INSTANCE"
+                fi
                 force_instance="aiserver-tailscale"
                 shift
                 ;;
@@ -286,39 +540,51 @@ main() {
                 ;;
         esac
     done
-
+    
     # Select instance
     local instance
     if [[ -n "$force_instance" ]]; then
         instance="$force_instance"
         debug "Using forced instance: $instance"
     else
-        instance=$(select_instance)
+        # Auto-discover (call directly to avoid subshell variable scope issues)
+        debug "Selecting best available instance with model '$MODEL'..."
+        if try_local_network; then
+            instance="aiserver-local"
+        elif try_tailscale; then
+            instance="aiserver-tailscale"
+        elif try_localhost; then
+            instance="local"
+        else
+            instance="none"
+        fi
     fi
-
+    
     if [[ "$instance" == "none" ]]; then
         error "No Ollama instance available with model '$MODEL'"
-        show_status
+        echo ""
+        echo "Run '${SCRIPT_NAME} -s' to see discovery status"
         exit "$EXIT_NO_INSTANCE"
     fi
-
+    
     # Get connection info
-    local base_url name
-    base_url=$(get_base_url "$instance")
-    name=$(get_name "$instance")
-
+    local base_url display_name
+    base_url=$(get_base_url)
+    display_name=$(get_display_name "$instance")
+    
     if [[ "$quiet" != "true" ]]; then
-        echo -e "${CYAN}→ ${name}${NC} (${base_url})"
+        echo -e "${CYAN}→ ${display_name}${NC}"
+        echo -e "${CYAN}  URL: ${base_url}${NC}"
         echo -e "${CYAN}  Model: ${MODEL}${NC}"
     fi
-
+    
     # Launch claude with Ollama backend
     export ANTHROPIC_AUTH_TOKEN="ollama"
     export ANTHROPIC_BASE_URL="$base_url"
     export ANTHROPIC_MODEL="$MODEL"
-
+    
     debug "Launching claude with ANTHROPIC_BASE_URL=$base_url ANTHROPIC_MODEL=$MODEL"
-
+    
     exec claude "${claude_args[@]+"${claude_args[@]}"}"
 }
 

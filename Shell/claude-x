@@ -1,0 +1,463 @@
+#!/usr/bin/env bash
+#
+# claude-x - Launch Claude Code with external API providers
+#
+# Supports various Anthropic-compatible API providers like Z.ai GLM,
+# OpenAI, DeepSeek, Groq, and custom endpoints.
+#
+# Compatible with bash 3.2+ (macOS default)
+#
+
+# =============================================================================
+# STRICT MODE & SAFETY
+# =============================================================================
+set -euo pipefail
+
+# =============================================================================
+# EXIT CODES
+# =============================================================================
+readonly EXIT_OK=0
+readonly EXIT_DEPENDENCY=65
+readonly EXIT_NO_PROVIDER=66
+readonly EXIT_NO_API_KEY=67
+readonly EXIT_CONFIG_ERROR=68
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-x"
+readonly CONFIG_FILE="${CONFIG_DIR}/config"
+readonly DEBUG="${DEBUG:-false}"
+readonly SCRIPT_NAME="$(basename "$0")"
+
+# =============================================================================
+# BUILT-IN PROVIDERS
+# Format: "name|base_url|env_var_for_key|default_model|display_name"
+# =============================================================================
+BUILTIN_PROVIDERS=(
+    "zai|https://api.z.ai/api/anthropic|ZAI_API_KEY|GLM-4.7|Z.ai"
+    "openai|https://api.openai.com/v1|OPENAI_API_KEY|gpt-4o|OpenAI"
+    "deepseek|https://api.deepseek.com|DEEPSEEK_API_KEY|deepseek-chat|DeepSeek"
+    "groq|https://api.groq.com/openai/v1|GROQ_API_KEY|llama-3.1-70b-versatile|Groq"
+    "together|https://api.together.xyz/v1|TOGETHER_API_KEY|meta-llama/Llama-3-70b-chat-hf|Together AI"
+    "mistral|https://api.mistral.ai/v1|MISTRAL_API_KEY|mistral-large-latest|Mistral AI"
+    "anthropic|https://api.anthropic.com/v1|ANTHROPIC_API_KEY|claude-sonnet-4-20250514|Anthropic"
+)
+
+# Will be populated after loading config
+PROVIDERS=()
+
+# =============================================================================
+# COLORS (disabled if not a terminal)
+# =============================================================================
+if [[ -t 1 ]]; then
+    readonly RED='\033[0;31m'
+    readonly GREEN='\033[0;32m'
+    readonly YELLOW='\033[1;33m'
+    readonly CYAN='\033[0;36m'
+    readonly DIM='\033[2m'
+    readonly NC='\033[0m'
+else
+    readonly RED=''
+    readonly GREEN=''
+    readonly YELLOW=''
+    readonly CYAN=''
+    readonly DIM=''
+    readonly NC=''
+fi
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+debug() {
+    if [[ "$DEBUG" == "true" ]]; then
+        echo -e "${YELLOW}[DEBUG]${NC} $*" >&2
+    fi
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $*" >&2
+}
+
+warn() {
+    echo -e "${YELLOW}[WARN]${NC} $*" >&2
+}
+
+# =============================================================================
+# DEPENDENCY CHECK
+# =============================================================================
+check_dependencies() {
+    if ! command -v claude &>/dev/null; then
+        error "claude command not found in PATH"
+        exit "$EXIT_DEPENDENCY"
+    fi
+}
+
+# =============================================================================
+# CONFIG MANAGEMENT
+# =============================================================================
+
+# Create default config file if it doesn't exist
+create_default_config() {
+    mkdir -p "$CONFIG_DIR"
+    
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        cat > "$CONFIG_FILE" <<'CONFIGEOF'
+# claude-x configuration
+# This file is sourced by bash - use valid bash syntax
+#
+# API Keys - Set the keys for providers you want to use
+# Keep this file secure! (chmod 600)
+#
+
+# Z.ai (Zhipu AI) - https://open.bigmodel.cn/
+#ZAI_API_KEY="your-key-here"
+
+# OpenAI - https://platform.openai.com/
+#OPENAI_API_KEY="sk-xxx"
+
+# DeepSeek - https://platform.deepseek.com/
+#DEEPSEEK_API_KEY="sk-xxx"
+
+# Groq - https://console.groq.com/
+#GROQ_API_KEY="gsk_xxx"
+
+# Together AI - https://api.together.xyz/
+#TOGETHER_API_KEY="xxx"
+
+# Mistral AI - https://console.mistral.ai/
+#MISTRAL_API_KEY="xxx"
+
+# Anthropic - https://console.anthropic.com/
+#ANTHROPIC_API_KEY="sk-ant-xxx"
+
+# =============================================================================
+# Custom Providers (optional)
+# Format: "name|base_url|env_var_for_key|default_model|display_name"
+# =============================================================================
+#CUSTOM_PROVIDERS=(
+#    "local-llm|http://localhost:8080/v1|LOCAL_API_KEY|custom-model|Local LLM"
+#)
+
+# =============================================================================
+# Model Overrides (optional)
+# Override the default model for any provider
+# =============================================================================
+#ZAI_MODEL="glm-4-plus"
+#OPENAI_MODEL="gpt-4-turbo"
+#DEEPSEEK_MODEL="deepseek-coder"
+
+# =============================================================================
+# Default Provider (optional)
+# Used when no -p/--provider is specified
+# =============================================================================
+#DEFAULT_PROVIDER="anthropic"
+
+CONFIGEOF
+        chmod 600 "$CONFIG_FILE"
+        echo -e "${GREEN}Created config file:${NC} $CONFIG_FILE"
+        echo "Edit this file to add your API keys."
+    fi
+}
+
+# Load and validate config
+load_config() {
+    create_default_config
+    
+    # Check config file permissions
+    if [[ -f "$CONFIG_FILE" ]]; then
+        local perms
+        perms=$(stat -f "%OLp" "$CONFIG_FILE" 2>/dev/null || stat -c "%a" "$CONFIG_FILE" 2>/dev/null)
+        if [[ "$perms" != "600" && "$perms" != "400" ]]; then
+            warn "Config file has loose permissions ($perms). Consider: chmod 600 $CONFIG_FILE"
+        fi
+        
+        # Source the config file
+        # shellcheck disable=SC1090
+        source "$CONFIG_FILE"
+        debug "Loaded config from $CONFIG_FILE"
+    fi
+}
+
+# Build the provider list from built-in and custom providers
+build_provider_list() {
+    # Start with built-in providers
+    PROVIDERS=("${BUILTIN_PROVIDERS[@]}")
+    
+    # Add custom providers if defined (bash 3.x compatible check)
+    if [[ "${CUSTOM_PROVIDERS+x}" == "x" ]] && [[ ${#CUSTOM_PROVIDERS[@]} -gt 0 ]]; then
+        PROVIDERS+=("${CUSTOM_PROVIDERS[@]}")
+        debug "Added ${#CUSTOM_PROVIDERS[@]} custom provider(s)"
+    fi
+    
+    debug "Total providers available: ${#PROVIDERS[@]}"
+}
+
+# =============================================================================
+# PROVIDER FUNCTIONS
+# =============================================================================
+
+# Find provider entry by name (returns the full entry string or empty)
+# Args: $1 = provider name
+find_provider_entry() {
+    local search_name="$1"
+    local entry name
+    
+    for entry in "${PROVIDERS[@]}"; do
+        name="${entry%%|*}"
+        if [[ "$name" == "$search_name" ]]; then
+            echo "$entry"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Get provider field by name
+# Args: $1 = provider name, $2 = field index (0=name, 1=base_url, 2=key_var, 3=default_model, 4=display_name)
+get_provider_field() {
+    local name="$1"
+    local field_idx="$2"
+    local entry
+    
+    entry=$(find_provider_entry "$name") || return 1
+    echo "$entry" | cut -d'|' -f$((field_idx + 1))
+}
+
+# Check if provider exists
+# Args: $1 = provider name
+provider_exists() {
+    find_provider_entry "$1" >/dev/null 2>&1
+}
+
+# Check if provider has API key configured
+# Args: $1 = provider name
+has_api_key() {
+    local name="$1"
+    local key_var key_value
+    
+    key_var=$(get_provider_field "$name" 2) || return 1
+    eval "key_value=\"\${${key_var}:-}\""
+    [[ -n "$key_value" ]]
+}
+
+# Get the model for a provider (config override or default)
+# Args: $1 = provider name
+get_model() {
+    local name="$1"
+    local upper_name override_var override_value
+    
+    upper_name=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+    override_var="${upper_name}_MODEL"
+    
+    # Check for model override in config (bash 3.x compatible)
+    eval "override_value=\"\${${override_var}:-}\""
+    if [[ -n "$override_value" ]]; then
+        echo "$override_value"
+        return
+    fi
+    
+    # Fall back to default
+    get_provider_field "$name" 3
+}
+
+# =============================================================================
+# HELP
+# =============================================================================
+print_help() {
+    cat <<EOF
+Usage: ${SCRIPT_NAME} -p PROVIDER [OPTIONS] [CLAUDE_ARGS...]
+
+Launch Claude Code with an external API provider.
+
+OPTIONS:
+    -p, --provider PROVIDER  Select provider (uses DEFAULT_PROVIDER if not set)
+    -l, --list               List available providers and their status
+    -m, --model MODEL        Override the default model for the provider
+    -q, --quiet              Suppress provider selection message
+    -h, --help               Show this help message
+
+CONFIGURATION:
+    Config file: ${CONFIG_FILE}
+    
+    Add your API keys to the config file. Run with -l to see which
+    providers have keys configured.
+    
+    Set DEFAULT_PROVIDER in the config file to skip -p flag.
+
+EXAMPLES:
+    ${SCRIPT_NAME}                        # Use DEFAULT_PROVIDER (if set)
+    ${SCRIPT_NAME} -l                     # List providers
+    ${SCRIPT_NAME} -p zai                 # Use Z.ai with default model
+    ${SCRIPT_NAME} -p openai -m gpt-4     # Use OpenAI with specific model
+    ${SCRIPT_NAME} -p deepseek -- --help  # Pass --help to claude
+
+BUILT-IN PROVIDERS:
+EOF
+    for provider_entry in "${BUILTIN_PROVIDERS[@]}"; do
+        local name display_name
+        IFS='|' read -r name _ _ _ display_name <<< "$provider_entry"
+        printf "    %-12s %s\n" "$name" "$display_name"
+    done
+    
+    cat <<EOF
+
+ENVIRONMENT:
+    DEBUG=true               Enable debug output
+
+EOF
+}
+
+# List all providers with their status
+list_providers() {
+    echo -e "${CYAN}=== Available Providers ===${NC}"
+    echo ""
+    
+    for provider_entry in "${PROVIDERS[@]}"; do
+        local name base_url key_var default_model display_name
+        IFS='|' read -r name base_url key_var default_model display_name <<< "$provider_entry"
+        
+        local status
+        if has_api_key "$name"; then
+            status="${GREEN}[OK]${NC}"
+        else
+            status="${DIM}[--]${NC}"
+        fi
+        
+        local model
+        model=$(get_model "$name")
+        
+        printf "  %b %-12s %-20s ${DIM}model: %s${NC}\n" "$status" "$name" "$display_name" "$model"
+    done
+    
+    echo ""
+    echo -e "${DIM}[OK] = API key configured    [--] = No API key${NC}"
+    echo -e "${DIM}Config: ${CONFIG_FILE}${NC}"
+    echo ""
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+main() {
+    check_dependencies
+    load_config
+    build_provider_list
+    
+    # Parse arguments
+    local provider=""
+    local model_override=""
+    local quiet="false"
+    local claude_args=()
+    
+    # Handle no arguments - show help unless DEFAULT_PROVIDER is set
+    if [[ $# -eq 0 ]] && [[ -z "${DEFAULT_PROVIDER:-}" ]]; then
+        print_help
+        exit "$EXIT_OK"
+    fi
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -l|--list)
+                list_providers
+                exit "$EXIT_OK"
+                ;;
+            -h|--help)
+                print_help
+                exit "$EXIT_OK"
+                ;;
+            -p|--provider)
+                if [[ -z "${2:-}" ]]; then
+                    error "Provider name required after $1"
+                    exit "$EXIT_NO_PROVIDER"
+                fi
+                provider="$2"
+                shift 2
+                ;;
+            -m|--model)
+                if [[ -z "${2:-}" ]]; then
+                    error "Model name required after $1"
+                    exit "$EXIT_CONFIG_ERROR"
+                fi
+                model_override="$2"
+                shift 2
+                ;;
+            -q|--quiet)
+                quiet="true"
+                shift
+                ;;
+            --)
+                shift
+                claude_args+=("$@")
+                break
+                ;;
+            -*)
+                error "Unknown option: $1"
+                echo "Use -h for help"
+                exit "$EXIT_CONFIG_ERROR"
+                ;;
+            *)
+                claude_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    
+    # Use default provider if none specified
+    if [[ -z "$provider" ]]; then
+        if [[ -n "${DEFAULT_PROVIDER:-}" ]]; then
+            provider="$DEFAULT_PROVIDER"
+            debug "Using default provider: $provider"
+        else
+            error "No provider selected. Use -p PROVIDER or -l to list providers."
+            echo "Tip: Set DEFAULT_PROVIDER in config file for a default."
+            exit "$EXIT_NO_PROVIDER"
+        fi
+    fi
+    
+    if ! provider_exists "$provider"; then
+        error "Unknown provider: $provider"
+        echo "Use -l to list available providers."
+        exit "$EXIT_NO_PROVIDER"
+    fi
+    
+    # Get provider details
+    local base_url key_var display_name api_key
+    base_url=$(get_provider_field "$provider" 1)
+    key_var=$(get_provider_field "$provider" 2)
+    display_name=$(get_provider_field "$provider" 4)
+    
+    # Check API key
+    eval "api_key=\"\${${key_var}:-}\""
+    if [[ -z "$api_key" ]]; then
+        error "No API key configured for $provider"
+        echo ""
+        echo "Set ${key_var} in: ${CONFIG_FILE}"
+        exit "$EXIT_NO_API_KEY"
+    fi
+    
+    # Determine model
+    local model
+    if [[ -n "$model_override" ]]; then
+        model="$model_override"
+    else
+        model=$(get_model "$provider")
+    fi
+    
+    # Display selection
+    if [[ "$quiet" != "true" ]]; then
+        echo -e "${CYAN}→ ${display_name}${NC} (${base_url})"
+        echo -e "${CYAN}  Model: ${model}${NC}"
+    fi
+    
+    # Set environment and launch claude
+    export ANTHROPIC_AUTH_TOKEN="$api_key"
+    export ANTHROPIC_BASE_URL="$base_url"
+    export ANTHROPIC_MODEL="$model"
+    
+    debug "Launching claude with ANTHROPIC_BASE_URL=$base_url ANTHROPIC_MODEL=$model"
+    
+    exec claude "${claude_args[@]+"${claude_args[@]}"}"
+}
+
+main "$@"

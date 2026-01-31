@@ -1,0 +1,59 @@
+# claude-x configuration
+# Copy this file to: ~/.config/claude-x/config
+# Then edit it to add your API keys.
+#
+# This file is sourced by bash - use valid bash syntax
+# Keep this file secure! (chmod 600 ~/.config/claude-x/config)
+#
+
+# =============================================================================
+# API Keys
+# Uncomment and set the keys for providers you want to use
+# =============================================================================
+
+# Z.ai (Zhipu AI) - https://open.bigmodel.cn/
+#ZAI_API_KEY="your-key-here"
+
+# OpenAI - https://platform.openai.com/
+#OPENAI_API_KEY="sk-xxx"
+
+# DeepSeek - https://platform.deepseek.com/
+#DEEPSEEK_API_KEY="sk-xxx"
+
+# Groq - https://console.groq.com/
+#GROQ_API_KEY="gsk_xxx"
+
+# Together AI - https://api.together.xyz/
+#TOGETHER_API_KEY="xxx"
+
+# Mistral AI - https://console.mistral.ai/
+#MISTRAL_API_KEY="xxx"
+
+# Anthropic - https://console.anthropic.com/
+#ANTHROPIC_API_KEY="sk-ant-xxx"
+
+# =============================================================================
+# Custom Providers (optional)
+# Add your own Anthropic-compatible API endpoints
+# Format: "name|base_url|env_var_for_key|default_model|display_name"
+# =============================================================================
+#CUSTOM_PROVIDERS=(
+#    "local-llm|http://localhost:8080/v1|LOCAL_API_KEY|custom-model|Local LLM"
+#    "azure|https://your-resource.openai.azure.com|AZURE_API_KEY|gpt-4|Azure OpenAI"
+#)
+
+# If using custom providers, set their API keys here:
+#LOCAL_API_KEY="xxx"
+#AZURE_API_KEY="xxx"
+
+# =============================================================================
+# Model Overrides (optional)
+# Override the default model for any built-in provider
+# =============================================================================
+#ZAI_MODEL="glm-4-plus"
+#OPENAI_MODEL="gpt-4-turbo"
+#DEEPSEEK_MODEL="deepseek-coder"
+#GROQ_MODEL="mixtral-8x7b-32768"
+#TOGETHER_MODEL="mistralai/Mixtral-8x7B-Instruct-v0.1"
+#MISTRAL_MODEL="mistral-medium"
+#ANTHROPIC_MODEL="claude-3-opus-20240229"
