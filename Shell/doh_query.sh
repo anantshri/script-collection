@@ -14,13 +14,20 @@ print_row() {
 # Define an array of providers with their details
 providers=(
     "CloudFlare|https://cloudflare-dns.com/dns-query?name={domain}"
-    "Quad9|https://dns.quad9.net:5053/dns-query?name={domain}"
     "GoogleDNS|https://dns.google/resolve?name={domain}"
     "DNS0.eu|https://dns0.eu/dns-query?name={domain}"
+    "Quad9|https://dns.quad9.net:5053/dns-query?name={domain}"
     # Add more providers as needed
 
 )
 
+check_server () {
+    url=$1
+    response=$(curl -s --http2 --header "accept: application/dns-json" "$url")
+    resolved_data=$(echo "$response" | jq -r '.Answer[]?.data' | paste -sd "," -)
+    print_row "$name" "$resolved_data"
+
+}
 
 if [ $# -eq 1 ]; then
     domain=$1
@@ -31,14 +38,11 @@ if [ $# -eq 1 ]; then
 
     for provider in "${providers[@]}"; do
         IFS='|' read -r name url_template <<< "$provider"
-        url="${url_template//\{domain\}/$domain}"
-
+        url="${url_template//\{domain\}/$domain}"        
         # Fetch and parse the DNS response
-        response=$(curl -s --http2 --header "accept: application/dns-json" "$url")
-        resolved_data=$(echo "$response" | jq -r '.Answer[]?.data' | paste -sd "," -)
-
-        print_row "$name" "$resolved_data"
+        check_server $url &
     done
+    wait
 else
     echo "Usage: $0 <domain name>"
 fi
