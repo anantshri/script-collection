@@ -32,7 +32,7 @@ readonly AISERVER_TAILSCALE_NAME="${AISERVER_TAILSCALE_NAME:-}"
 # Ollama port on AI server
 readonly AISERVER_PORT="${AISERVER_PORT:-11434}"
 # Model to use
-MODEL="${CLAUDE_LOCAL_MODEL:-qwen3-coder:30b}"  # Not readonly - can be overridden with -m
+MODEL="${CLAUDE_LOCAL_MODEL:-qwen3-coder-next:latest}"  # Not readonly - can be overridden with -m
 readonly DEBUG="${DEBUG:-false}"
 readonly SCRIPT_NAME="$(basename "$0")"
 
@@ -175,23 +175,25 @@ get_tailscale_ip() {
 # =============================================================================
 
 # Check if model is available on an Ollama instance
+# Uses curl to query the API directly (avoids issues with ollama CLI wrappers)
 # Args: $1 = host (hostname or IP, empty for localhost)
 # Returns: 0 if model available, 1 otherwise
 check_model() {
     local host="${1:-}"
-    local model_list
-    local ollama_host
-    
+    local api_url
+
     if [[ -z "$host" ]]; then
-        debug "Checking model '$MODEL' on localhost"
-        model_list=$(ollama list 2>/dev/null) || return 1
+        api_url="http://localhost:11434"
     else
-        ollama_host="${host}:${AISERVER_PORT}"
-        debug "Checking model '$MODEL' at $ollama_host"
-        model_list=$(OLLAMA_HOST="$ollama_host" ollama list 2>/dev/null) || return 1
+        api_url="http://${host}:${AISERVER_PORT}"
     fi
-    
-    if echo "$model_list" | grep -q "^${MODEL}"; then
+
+    debug "Checking model '$MODEL' at $api_url"
+
+    local response
+    response=$(curl -sf --connect-timeout 3 "${api_url}/api/tags" 2>/dev/null) || return 1
+
+    if echo "$response" | grep -q "\"name\":\"${MODEL}\""; then
         debug "Model '$MODEL' found"
         return 0
     fi
@@ -488,6 +490,10 @@ main() {
                 exit "$EXIT_OK"
                 ;;
             -l|--local)
+                if ! try_localhost; then
+                    error "Local Ollama not available or model '$MODEL' not found"
+                    exit "$EXIT_NO_INSTANCE"
+                fi
                 force_instance="local"
                 shift
                 ;;
